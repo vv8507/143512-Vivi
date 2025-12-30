@@ -1,0 +1,184 @@
+import { useEffect, useState } from "react";
+import { getDonatedItemsFromDB, deleteDonatedItemFromDB, subscribeToItemChanges, DatabaseDonatedItem } from "@/lib/database";
+import { ItemCard, PlaceholderCard } from "@/components/ItemCard";
+import { ClaimConfirmDialog, ClaimSuccessDialog } from "@/components/ClaimDialog";
+import { Package } from "lucide-react";
+
+interface PlaceholderItem {
+  id: string;
+  name: string;
+  category: string;
+  condition: string;
+  location: string;
+  imageUrl: string;
+}
+
+const INITIAL_PLACEHOLDER_ITEMS: PlaceholderItem[] = [
+  { id: "ph-1", name: "Vintage Desk Lamp", category: "Furniture", condition: "Good", location: "Downtown", imageUrl: "https://images.unsplash.com/photo-1507473885765-e6ed057f782c?w=600&h=400&fit=crop" },
+  { id: "ph-2", name: "Children's Books Set", category: "Books", condition: "Like New", location: "East Side", imageUrl: "https://images.unsplash.com/photo-1512820790803-83ca734da794?w=600&h=400&fit=crop" },
+  { id: "ph-3", name: "Kitchen Mixer", category: "Kitchen", condition: "Fair", location: "Suburb Area", imageUrl: "https://images.unsplash.com/photo-1594385208974-2e75f8d7bb48?w=600&h=400&fit=crop" },
+  { id: "ph-4", name: "Yoga Mat", category: "Sports", condition: "Good", location: "North District", imageUrl: "https://images.unsplash.com/photo-1601925260368-ae2f83cf8b7f?w=600&h=400&fit=crop" },
+  { id: "ph-5", name: "Winter Jacket", category: "Clothing", condition: "Like New", location: "Central", imageUrl: "https://images.unsplash.com/photo-1551028719-00167b16eac5?w=600&h=400&fit=crop" },
+  { id: "ph-6", name: "Board Games Bundle", category: "Toys", condition: "Good", location: "West End", imageUrl: "https://images.unsplash.com/photo-1611371805429-8b5c1b2c34ba?w=600&h=400&fit=crop" },
+];
+
+const CLAIMED_PLACEHOLDERS_KEY = "heartshare_claimed_placeholders";
+
+function getClaimedPlaceholderIds(): string[] {
+  try {
+    const stored = localStorage.getItem(CLAIMED_PLACEHOLDERS_KEY);
+    return stored ? JSON.parse(stored) : [];
+  } catch {
+    return [];
+  }
+}
+
+function addClaimedPlaceholderId(id: string): void {
+  const claimed = getClaimedPlaceholderIds();
+  if (!claimed.includes(id)) {
+    claimed.push(id);
+    localStorage.setItem(CLAIMED_PLACEHOLDERS_KEY, JSON.stringify(claimed));
+  }
+}
+
+export function ItemGrid() {
+  const [donatedItems, setDonatedItems] = useState<DatabaseDonatedItem[]>([]);
+  const [placeholderItems, setPlaceholderItems] = useState<PlaceholderItem[]>(() => {
+    const claimedIds = getClaimedPlaceholderIds();
+    return INITIAL_PLACEHOLDER_ITEMS.filter(item => !claimedIds.includes(item.id));
+  });
+  const [isLoading, setIsLoading] = useState(true);
+
+  // Claim dialog state
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [successOpen, setSuccessOpen] = useState(false);
+  const [claimTarget, setClaimTarget] = useState<{ type: "donated" | "placeholder"; id: string; name: string; email: string } | null>(null);
+
+  useEffect(() => {
+    // Fetch initial data
+    const fetchItems = async () => {
+      const items = await getDonatedItemsFromDB();
+      setDonatedItems(items);
+      setIsLoading(false);
+    };
+    
+    fetchItems();
+
+    // Subscribe to realtime updates for cross-device sync
+    const unsubscribe = subscribeToItemChanges(
+      (newItem) => {
+        setDonatedItems((prev) => [newItem, ...prev]);
+      },
+      (deletedId) => {
+        setDonatedItems((prev) => prev.filter((item) => item.id !== deletedId));
+      }
+    );
+
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
+  const handleClaimAttempt = (type: "donated" | "placeholder", id: string, name: string, email: string) => {
+    setClaimTarget({ type, id, name, email });
+    setConfirmOpen(true);
+  };
+
+  const handleConfirmClaim = async () => {
+    if (!claimTarget) return;
+
+    if (claimTarget.type === "donated") {
+      // Remove from database
+      const success = await deleteDonatedItemFromDB(claimTarget.id);
+      if (success) {
+        // Realtime subscription will handle state update
+      }
+    } else {
+      // Remove placeholder from state AND persist to localStorage
+      addClaimedPlaceholderId(claimTarget.id);
+      setPlaceholderItems((prev) => prev.filter((item) => item.id !== claimTarget.id));
+    }
+
+    // Close confirm, show success
+    setConfirmOpen(false);
+    setSuccessOpen(true);
+  };
+
+  const handleSuccessClose = () => {
+    setSuccessOpen(false);
+    setClaimTarget(null);
+  };
+
+  return (
+    <section id="items" className="py-16 md:py-24 bg-background">
+      <div className="container">
+        <div className="text-center mb-12">
+          <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-accent text-accent-foreground mb-4">
+            <Package className="h-4 w-4" />
+            <span className="text-sm font-medium">Available Items</span>
+          </div>
+          <h2 className="text-3xl md:text-4xl font-bold text-foreground mb-4">
+            Browse Donated Items
+          </h2>
+          <p className="text-muted-foreground max-w-2xl mx-auto">
+            Discover items waiting for a new home. Each donation represents someone's 
+            generosity and your opportunity to give an item a second life.
+          </p>
+        </div>
+
+        {isLoading ? (
+          <div className="flex items-center justify-center py-12">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+          </div>
+        ) : (
+          <div id="item-listing-grid" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            {/* Dynamically added donated items from database */}
+            {donatedItems.map((item, index) => (
+              <ItemCard
+                key={item.id}
+                item={{
+                  id: item.id,
+                  itemName: item.name,
+                  description: item.description || "",
+                  category: item.category,
+                  condition: item.condition,
+                  location: item.location,
+                  contactEmail: item.contact_email,
+                  imageBase64: item.image_url || "",
+                  createdAt: item.created_at,
+                }}
+                isNew={index === 0}
+                onClaim={(mappedItem) => handleClaimAttempt("donated", mappedItem.id, mappedItem.itemName, mappedItem.contactEmail)}
+              />
+            ))}
+
+            {/* Static placeholder items */}
+            {placeholderItems.map((item) => (
+              <PlaceholderCard
+                key={item.id}
+                id={item.id}
+                name={item.name}
+                category={item.category}
+                condition={item.condition}
+                location={item.location}
+                imageUrl={item.imageUrl}
+                onClaim={() => handleClaimAttempt("placeholder", item.id, item.name, "donor@heartshare.example.com")}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Confirmation Modal */}
+      <ClaimConfirmDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        onConfirm={handleConfirmClaim}
+        itemName={claimTarget?.name || ""}
+      />
+
+      {/* Success Modal */}
+      <ClaimSuccessDialog open={successOpen} onOpenChange={handleSuccessClose} contactEmail={claimTarget?.email || ""} />
+    </section>
+  );
+}
